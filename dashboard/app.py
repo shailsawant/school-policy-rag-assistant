@@ -10,6 +10,11 @@ from google import genai
 from google.genai import errors, types
 from sentence_transformers import SentenceTransformer
 
+from io import BytesIO
+from urllib.request import urlopen
+
+from pypdf import PdfReader
+
 project_folder = Path(__file__).resolve().parent.parent
 load_dotenv(project_folder / ".env")
 
@@ -27,19 +32,89 @@ st.write(
 
 @st.cache_resource
 def load_resources():
-    model = SentenceTransformer("sentence-transformers/all-MiniLM-L6-v2")
-
-    db = chromadb.PersistentClient(
-        path=str(project_folder / "chroma_db")
+    source_url = (
+        "https://sis.edu.in/wp-content/uploads/2025/02/"
+        "STUDENT-PARENT-HANDBOOK.pdf"
     )
 
-    collection = db.get_collection(
+    # Download directly from the school instead of storing it in GitHub.
+    try:
+        with urlopen(source_url, timeout=30) as response:
+            pdf_bytes = response.read()
+    except OSError as error:
+        raise ValueError(
+            "Could not download the handbook. Please try again later."
+        ) from error
+
+    reader = PdfReader(BytesIO(pdf_bytes))
+
+    selected_pages = [34, 35, 38, 39, 40, 41, 42, 43, 44, 45, 46]
+    chunks = []
+
+    for page_number in selected_pages:
+        raw_text = reader.pages[page_number - 1].extract_text() or ""
+
+        lines = []
+        for line in raw_text.splitlines():
+            clean_line = " ".join(line.split())
+
+            if clean_line and clean_line not in {"`", str(page_number)}:
+                lines.append(clean_line)
+
+        words = "\n".join(lines).split()
+
+        if not words:
+            raise ValueError(f"No text found on page {page_number}")
+
+        start = 0
+        chunk_number = 1
+
+        while start < len(words):
+            end = start + 180
+
+            chunks.append({
+                "id": f"page_{page_number}_chunk_{chunk_number}",
+                "text": " ".join(words[start:end]),
+                "page": page_number,
+                "source_url": source_url
+            })
+
+            if end >= len(words):
+                break
+
+            start += 150
+            chunk_number += 1
+
+    model = SentenceTransformer("sentence-transformers/all-MiniLM-L6-v2")
+
+    embeddings = model.encode(
+        [chunk["text"] for chunk in chunks],
+        normalize_embeddings=True
+    )
+
+    # The small database lives in memory and is rebuilt after a restart.
+    db = chromadb.EphemeralClient()
+
+    collection = db.get_or_create_collection(
         name="school_policies",
-        embedding_function=None
+        embedding_function=None,
+        configuration={"hnsw": {"space": "cosine"}}
+    )
+
+    collection.upsert(
+        ids=[chunk["id"] for chunk in chunks],
+        documents=[chunk["text"] for chunk in chunks],
+        embeddings=embeddings.tolist(),
+        metadatas=[
+            {
+                "page": chunk["page"],
+                "source_url": chunk["source_url"]
+            }
+            for chunk in chunks
+        ]
     )
 
     return model, collection
-
 
 def generate_answer(question, context):
     api_key = os.getenv("GEMINI_API_KEY")
