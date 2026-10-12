@@ -218,3 +218,14 @@ __marimo__/
 
 # Streamlit
 .streamlit/secrets.toml
+
+
+.venv/
+.env
+.streamlit/secrets.toml
+__pycache__/
+chroma_db/
+data/*.pdf
+data/policies.json
+data/chunks.json
+data/embeddings.npy
