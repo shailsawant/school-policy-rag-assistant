@@ -15,6 +15,8 @@ from urllib.request import urlopen
 
 from pypdf import PdfReader
 
+import logging
+
 project_folder = Path(__file__).resolve().parent.parent
 load_dotenv(project_folder / ".env")
 
@@ -42,6 +44,7 @@ def load_resources():
         with urlopen(source_url, timeout=30) as response:
             pdf_bytes = response.read()
     except OSError as error:
+        logging.exception("School handbook download failed")
         raise ValueError(
             "Could not download the handbook. Please try again later."
         ) from error
